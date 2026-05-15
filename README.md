@@ -6,45 +6,83 @@ and indexes it into Elasticsearch as a derived full-text search index.
 
 The entire stack runs with a single `docker compose up` command.
 
-## Running locally with docker compose up
+## Quick start
 
-Prerequisites:
+1. **Install Docker** (24 or later) with the Compose v2 plugin.
+   - macOS: install [Docker Desktop](https://www.docker.com/products/docker-desktop/),
+     or use [Colima](https://github.com/abiosoft/colima) if Docker Desktop is
+     unavailable (`brew install colima docker docker-compose` then
+     `colima start --cpu 4 --memory 6`).
+   - Linux: install `docker-ce` and `docker-compose-plugin` from your
+     distribution's packages.
+   - Windows: install Docker Desktop with WSL 2.
+2. **Clone the repository** and change into it:
+   ```
+   git clone https://github.com/D-Haku/ecommerce-api.git
+   cd ecommerce-api
+   ```
+3. **Start the stack**:
+   ```
+   docker compose up --build
+   ```
+   On the first run this downloads the MySQL and Elasticsearch images, builds
+   the `ingest` and `api` images, runs the ingest one-shot to load 194
+   products from DummyJSON into both MySQL and Elasticsearch, then starts the
+   API. Total first-run time is roughly 2 to 4 minutes depending on network
+   speed. Subsequent runs reuse the images and cached data volumes.
+4. **Verify the API is up**:
+   ```
+   curl http://localhost:3000/health
+   ```
+   You should see `{"status":"ok"}`.
+5. **Try a few endpoints**:
+   ```
+   curl http://localhost:3000/categories
+   curl 'http://localhost:3000/products?page=1&page_size=5'
+   curl http://localhost:3000/products/1
+   curl 'http://localhost:3000/products?query=iphone'
+   curl 'http://localhost:3000/products?category=smartphones'
+   curl 'http://localhost:3000/products?query=iphone&category=smartphones'
+   ```
+6. **Stop the stack** when you're done:
+   ```
+   docker compose down
+   ```
+   Add `-v` to also drop the MySQL and Elasticsearch data volumes.
 
-- Docker 24 or later with the Compose v2 plugin.
-- Internet access at first startup so the ingest container can reach
-  `https://dummyjson.com/products`.
+### Troubleshooting
 
-From the repository root, run:
+- **Port 3000 already in use**: stop whatever is bound to that port, or edit
+  the `api` service's `ports:` line in `docker-compose.yml` (for example
+  `"3001:3000"` to publish on host port 3001 instead).
+- **Elasticsearch keeps restarting**: the container needs at least 2 GB of
+  memory. On Colima use `colima start --memory 6` and on Docker Desktop
+  bump the memory limit under Settings > Resources.
+- **`docker compose up` hangs on "Starting converzai-ingest-1"**: the
+  healthchecks for MySQL and Elasticsearch have a `start_period` of 30
+  seconds. Ingestion begins once both report healthy. Watch logs with
+  `docker compose logs -f ingest`.
+- **You want to re-ingest**: run `docker compose down -v` to wipe the volumes,
+  then `docker compose up --build` again.
 
-```
-docker compose up
-```
+## How the stack starts up
 
-This command:
+When you run `docker compose up`:
 
-1. Pulls and starts the `mysql` and `elasticsearch` containers and waits for
-   both to report healthy via their respective healthchecks.
-2. Starts the `ingest` one-shot container which applies the SQL migrations,
-   creates the `products` Elasticsearch index with an explicit mapping, fetches
-   every product from DummyJSON (paginating 100 at a time), and upserts each
-   record into MySQL and Elasticsearch keyed by the source product id.
-3. Once `ingest` exits with code 0, Compose starts the `api` container which
-   listens on host port 3000.
+1. The `mysql` and `elasticsearch` containers start in parallel and are
+   monitored by their healthchecks (MySQL via `mysqladmin ping`,
+   Elasticsearch via cluster health on `localhost:9200`).
+2. Once both report healthy, the `ingest` one-shot container starts. It
+   applies the SQL migrations, creates the `products` Elasticsearch index
+   with an explicit strict mapping, paginates `https://dummyjson.com/products`
+   (100 records per page), and upserts every product into both MySQL and
+   Elasticsearch keyed by the source product id.
+3. After `ingest` exits 0, Compose starts the `api` container which listens
+   on host port 3000.
 
-The API is then reachable at:
-
-```
-http://localhost:3000
-```
-
-Re-running `docker compose up` is safe: `ingest` upserts by source id and the
-MySQL and Elasticsearch volumes persist data across runs.
-
-To stop the stack and discard the data volumes:
-
-```
-docker compose down -v
-```
+Re-running `docker compose up` is safe. Ingest upserts by source id, and the
+named MySQL and Elasticsearch volumes persist the data across restarts. To
+wipe the data and start fresh, run `docker compose down -v`.
 
 ## Running the tests
 
